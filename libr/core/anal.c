@@ -1388,10 +1388,77 @@ static int cmpfcn(const void *_a, const void *_b) {
 	return (_fcn1->addr > _fcn2->addr);
 }
 
-/* Fill out metadata struct of functions */
-static int fcnlist_gather_metadata(RList *fcns) {
+static RAnalFunction *fcnlist_find_fcn_at(RList *fcns, ut64 addr)
+{
 	RListIter *iter;
 	RAnalFunction *fcn;
+
+	r_list_foreach (fcns, iter, fcn) {
+		if (in_function (fcn, addr)) {
+			return fcn;
+		}
+	}
+	return NULL;
+}
+
+static int fcn_count_subgraph_nodes(RList *fcns, RAnalFunction *fcn, RList *visited)
+{
+	RListIter *iter;
+	RAnalRef *ref;
+	RAnalFunction *calledfcn;
+	int nodecount = 1;
+
+	r_list_append(visited, fcn);
+	r_list_foreach (fcn->refs, iter, ref) {
+		if (ref->type == R_ANAL_REF_TYPE_CALL) {
+			calledfcn = fcnlist_find_fcn_at (fcns, ref->addr);
+			if (!calledfcn) continue;
+			if (fcnlist_find_fcn_at (visited, ref->addr)) continue;
+			nodecount += fcn_count_subgraph_nodes (fcns, calledfcn, visited);
+		}
+	}
+	return nodecount;
+}
+
+static int fcn_count_calls(RAnalFunction *fcn)
+{
+	RListIter *iter;
+	RAnalRef *ref;
+	int edgecount = 0;
+
+	r_list_foreach (fcn->refs, iter, ref) {
+		if (ref->type == R_ANAL_REF_TYPE_CALL) {
+			edgecount += 1;
+		}
+	}
+	return edgecount;
+}
+
+static int fcn_count_subgraph_edges(RList *fcns, RAnalFunction *fcn, RList *visited)
+{
+	RListIter *iter;
+	RAnalRef *ref;
+	RAnalFunction *calledfcn;
+	int edgecount = 0;
+
+	r_list_append(visited, fcn);
+	r_list_foreach (fcn->refs, iter, ref) {
+		if (ref->type == R_ANAL_REF_TYPE_CALL) {
+			edgecount += 1;
+			calledfcn = fcnlist_find_fcn_at (fcns, ref->addr);
+			if (!calledfcn) continue;
+			if (fcnlist_find_fcn_at (visited, ref->addr)) continue;
+			edgecount += fcn_count_subgraph_edges (fcns, calledfcn, visited);
+		}
+	}
+	return edgecount;
+}
+
+/* Fill out metadata struct of functions */
+R_API int r_core_anal_fcnlist_gather_metadata(RList *fcns) {
+	RListIter *iter;
+	RAnalFunction *fcn;
+	RList visited;
 
 	r_list_foreach (fcns, iter, fcn) {
 		// Count the number of references and number of calls
@@ -1406,7 +1473,7 @@ static int fcnlist_gather_metadata(RList *fcns) {
 			numrefs++;
 		}
 		fcn->meta.numrefs = numrefs;
-		fcn->meta.numcallrefs= numcallrefs;
+		fcn->meta.numcallrefs = numcallrefs;
 
 		// Determine the bounds of the functions address space
 		ut64 min = UT64_MAX;
@@ -1424,8 +1491,12 @@ static int fcnlist_gather_metadata(RList *fcns) {
 		}
 		fcn->meta.min = min;
 		fcn->meta.max = max;
+
+		r_list_init(&visited);
+		fcn->meta.sgnc = fcn_count_subgraph_nodes (fcns, fcn, &visited);
+		r_list_init(&visited);
+		fcn->meta.sgec = fcn_count_subgraph_edges (fcns, fcn, &visited);
 	}
-	// TODO: Determine sgnc, sgec
 	return 0;
 }
 
@@ -1732,13 +1803,31 @@ static int fcn_list_legacy(RCore *core, RList *fcns)
 	return 0;
 }
 
+static int fcn_print_graph(RCore *core, RAnalFunction *fcn)
+{
+	char *name = get_fcn_name (core, fcn);
+	r_cons_printf ("%s 0x%08"PFMT64x" %i %i %i\n", name,
+			fcn->addr, fcn->meta.sgnc, fcn->meta.sgec, fcn_count_calls (fcn));
+	free (name);
+	return 0;
+}
+
+static int fcn_list_graph(RCore *core, RList *fcns)
+{
+	RListIter *iter;
+	RAnalFunction *fcn;
+	r_list_foreach (fcns, iter, fcn) {
+		fcn_print_graph (core, fcn);
+	}
+	r_cons_newline ();
+	return 0;
+}
+
 R_API int r_core_anal_fcn_list(RCore *core, const char *input, int rad) {
 	RList *fcns = core->anal->fcns;
 	if (r_list_empty (fcns)) return 0;
 
 	r_list_sort (fcns, &cmpfcn);
-	fcnlist_gather_metadata (fcns);
-
 	if (input) {		// input points to a filter argument
 		ut64 addr;
 		addr = core->offset;
@@ -1758,8 +1847,10 @@ R_API int r_core_anal_fcn_list(RCore *core, const char *input, int rad) {
 		}
 	}
 
-	r_list_sort (core->anal->fcns, &cmpfcn);
 	switch (rad) {
+	case 'g':
+		fcn_list_graph (core, fcns);
+		break;
 	case 's':
 		r_core_anal_fcn_list_size (core);
 		break;

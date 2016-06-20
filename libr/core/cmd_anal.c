@@ -993,11 +993,13 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 			eprintf ("Usage: afl[jlqs*]\n");
 			eprintf ("List all functions in quiet, commands or json format\n");
 			eprintf ("afl  - list functions\n");
+			eprintf ("aflg - list graph metadata of functions\n");
 			eprintf ("aflj - list functions in json format\n");
 			eprintf ("afll - list functions in verbose mode\n");
 			eprintf ("aflq - list functions in 'quiet' mode\n");
 			eprintf ("afls - print sum of sizes of all functions\n");
 			break;
+		case 'g':
 		case 'j':
 		case 'l':
 		case 'q':
@@ -4195,6 +4197,7 @@ static int cmd_anal_all(RCore *core, const char *input) {
 			flag_every_function (core);
 		//	r_core_cmd0 (core, "aai");
 		}
+		r_core_anal_fcnlist_gather_metadata (core->anal->fcns);
 		break;
 	case 't': {
 		ut64 cur = core->offset;
